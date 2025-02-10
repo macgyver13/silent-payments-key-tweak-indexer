@@ -1,0 +1,25 @@
+{
+	// Use IntelliSense to learn about possible attributes.
+	// Hover to view descriptions of existing attributes.
+	// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Launch",
+			"program": "${workspaceFolder}/tweak-indexer/target/debug/tweak-indexer",
+			"args": ["--send-pub","03820c38fbd1d0e4add8e242b51a009535c74c7d77ee437e86789db3fd4ffaf75c"],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug",
+			"program": "${workspaceFolder}/tweak-indexer/target/debug/tweak-indexer",
+			"args": ["--send-pub","03820c38fbd1d0e4add8e242b51a009535c74c7d77ee437e86789db3fd4ffaf75c",
+				"--silent","sp1qq2492yad5mzw7ylmd7cnyd66g9xnkd5a58m58g7f7785jakedel8cqmnu73zjmlhddf03epsa3qmwsmxtecypcxeyed73rsw2u585kxyxyuu9hc5"],
+			"cwd": "${workspaceFolder}"
+		}
+	]
+}
