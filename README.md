@@ -2,7 +2,7 @@
 
 - build a "key tweak indexer" that computes and stores silent payments key tweaks
   - user provides a sender public key and receiver sp address
-  - key tweak, txn output public key is computed
+  - ~~key tweak, txn output public key is computed~~
   - store sender public key, txn output public key, tweak in db
 - building a server that can respond with key tweaks for a given blockhash
   - webservice that responds key tweaks given a blockhash
