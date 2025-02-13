@@ -25,6 +25,10 @@ impl std::fmt::Display for ChainError {
     }
 }
 
+pub fn get_block_count() -> Result<String, String> {
+    bcli(&["getblockcount"])
+}
+
 pub fn get_block_hash(height: u32) -> Result<String, String> {
     bcli(&["getblockhash", &height.to_string()])
 }
@@ -77,11 +81,15 @@ impl<'a> Chain<'a> {
 
     fn save_tweak_data(&self, tweak: PublicKey, tx_id: &str) -> Result<(), ChainError> {
         let block_hash_str = self.block_hash_str().clone();
-        // println!("Saving tweak: {}, block hash: {}", tweak.to_string(), self.get_block().header.block_hash().to_string());
-        self.db.insert_tweak(&block_hash_str, &tweak.to_string(), tx_id);
+        let _ = self.db.insert_tweak(&database::Tweak { 
+            block_hash: block_hash_str, 
+            tweak: tweak.to_string(), 
+            tx_id: tx_id.to_string(), 
+        });
         Ok(())
     }
 
+    // Heavy inspiration from sp-client (https://github.com/cygnet3/sp-client) and rust-silentpayments (https://github.com/cygnet3/rust-silentpayments)
     fn process_transaction(&self, transaction: &Transaction) -> Result<bool, Box<dyn Error>> {
 
         //Calculate input pub keys
@@ -151,7 +159,7 @@ impl<'a> Chain<'a> {
         let mut has_tweaks: bool = false;
         
         for (i, tx) in block.txdata.iter().enumerate() {
-            // println!("Tx {}: {}", i, tx.compute_txid());
+            // Filter transactions by BIP352 consensus on allowed transactions
             // Only process transactions with outputs that have a valid P2TR scriptpubkey
             for output in tx.output.iter() {
                 if output.script_pubkey.is_p2tr() && XOnlyPublicKey::from_slice(&output.script_pubkey.as_bytes()[2..]).is_ok()  {

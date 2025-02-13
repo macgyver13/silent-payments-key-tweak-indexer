@@ -3,10 +3,26 @@
 - build a "key tweak indexer" that computes and stores silent payments key tweaks
   - ~~key tweak, txn output public key is computed~~
   - ~~store public key tweak in db~~
+  - ~~resume from last block indexed~~
 - building a server that can respond with key tweaks for a given blockhash
   - webservice that responds key tweaks given a blockhash
 
 ### *** Experimental - use at your own risk ***
+
+## Indexer Usage:
+
+```
+Usage: tweak-indexer [OPTIONS]
+
+*No Options* -> start at block 709632 and index tweaks until node blockcount
+
+Options:
+  --start-height 614860 #will start at indexing from block 614860 for 10 blocks
+  --end-height # describes far to index (supersedes --blocks)
+  --blocks # # will process n number of blocks before quitting
+```
+
+*Note: block 614862 has a tweak
 
 ## Resources:
 
