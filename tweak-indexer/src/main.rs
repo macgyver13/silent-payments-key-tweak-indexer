@@ -1,75 +1,106 @@
-use secp256k1::{rand, PublicKey, SecretKey, Scalar, Secp256k1};
-use std::str::FromStr;
-use sha2::{Sha256, Digest};
-use silentpayments::{SilentPaymentAddress, Network};
+use std::process::exit;
 use clap::Parser;
+
+
+mod chain;
+mod database;
 
 #[derive(Parser)]
 #[command(long_about)]
 struct Cli {
     #[arg(long)]
-    send_pub: Option<String>,
+    start_height: Option<u32>,
     #[arg(long)]
-    silent: Option<String>,
+    end_height: Option<u32>,
 }
 
-fn compute_silent_payment_key_tweak(sender_pubkey: &PublicKey, receiver_scan_pubkey: &PublicKey) -> Scalar {
-    let mut hasher = Sha256::new();
-    hasher.update(receiver_scan_pubkey.serialize());
-    hasher.update(sender_pubkey.serialize());
-    let tweak_bytes = hasher.finalize();
 
-    Scalar::from_be_bytes(tweak_bytes.try_into().expect("32 bytes required")).expect("Tweak convert failed")
-}
 
-fn compute_spend_payment_address(tweak: Scalar, receiver_scan_pubkey: &PublicKey) -> PublicKey {
-    let secp = Secp256k1::new();
-    let tweak_point = PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&tweak.to_be_bytes()).expect("Could not generate key from point"));
-    
-    receiver_scan_pubkey.combine(&tweak_point).expect("Failed to combine keys")
-}
+fn handle_inputs() -> (u32, u32) {
 
-fn handle_inputs() -> (PublicKey, SilentPaymentAddress) {
-    let secp = Secp256k1::new();
     let cli = Cli::parse();
 
-    //Generate sender public key if not supplied
-    let sender_pubkey = if let Some(pubkey_str) = cli.send_pub.as_deref() {
-        PublicKey::from_str(pubkey_str).expect("invalid pub key input provided")
+    // let silent_address = if let Some(silent_str) = cli.silent.as_deref() {
+    //     SilentPaymentAddress::try_from(silent_str).expect("invalid silent address input provided")
+    // } else {
+    //     println!("Generating Silent Payment Address, not provided with --silent argument");
+    //     //Generate receiver spend key pair
+    //     let spend_privkey = SecretKey::new(&mut rand::thread_rng());
+    //     let spend_pubkey = PublicKey::from_secret_key(&secp, &spend_privkey);
+    //     println!("Spend Pub Key (Hex): {}", hex::encode(spend_pubkey.serialize()));
+    //     //Generate receiver scan key pair
+    //     let scan_privkey = SecretKey::new(&mut rand::thread_rng());
+    //     let scan_pubkey = PublicKey::from_secret_key(&secp, &scan_privkey);
+    //     println!("Scan Pub Key (Hex): {}", hex::encode(scan_pubkey.serialize()));
+    //     SilentPaymentAddress::new(scan_pubkey, spend_pubkey, Network::Mainnet, 0).unwrap()
+    // };
+    let start_height = if let Some(height) = cli.start_height {
+        height
     } else {
-        //Generate sender key pair
-        println!("Generating sender public key, not provided with --send_pub argument");
-        let sender_privkey = SecretKey::new(&mut rand::thread_rng());
-        PublicKey::from_secret_key(&secp, &sender_privkey)
+        //Current height - 1
+        429147 //883312
     };
 
-    //Generate silent payment address if not supplied
-    let silent_address = if let Some(silent_str) = cli.silent.as_deref() {
-        SilentPaymentAddress::try_from(silent_str).expect("invalid silent address input provided")
+    let end_height = if let Some(height) = cli.end_height {
+        height
     } else {
-        println!("Generating Silent Payment Address, not provided with --silent argument");
-        //Generate receiver spend key pair
-        let spend_privkey = SecretKey::new(&mut rand::thread_rng());
-        let spend_pubkey = PublicKey::from_secret_key(&secp, &spend_privkey);
-        //Generate receiver scan key pair
-        let scan_privkey = SecretKey::new(&mut rand::thread_rng());
-        let scan_pubkey = PublicKey::from_secret_key(&secp, &scan_privkey);
-        SilentPaymentAddress::new(scan_pubkey, spend_pubkey, Network::Mainnet, 0).unwrap()
+        //Current height - 1
+        start_height + 1000
     };
 
-    (sender_pubkey, silent_address)
+    (start_height, end_height)
 }
 
 fn main() {
+    let (start_height, end_height) = handle_inputs();
+    let mut current_block = start_height;
 
-    let (sender_pubkey, silent_address) = handle_inputs();
+    let db = match database::Database::new("blocks.db") {
+        Ok(db) => db,
+        Err(err) => {
+            eprintln!("Not able to open database: {}", err);
+            exit(1);
+        }
+    };
+
+    let mut chain = chain::Chain::new(&db);
+    while current_block <= end_height {
+        let block_hash = match chain::get_block_hash(current_block) {
+            Ok(block_hash_str) => block_hash_str,
+            Err(err) => {
+                eprintln!("Error fetching block hash: {}", err);
+                exit(1);
+            }
+        };
+
+        // check if the block has been handled
+        if db.get_block(&block_hash).is_ok_and(|x| x.len() > 0) {
+            println!("******** Already processed block hash {}, height: {} ********", block_hash, current_block);
+            current_block += 1;
+            continue;
+        }
+        
+        println!("Block Hash {}, height: {}", block_hash, current_block);
+
+        let block_hex = match chain::get_block(&block_hash) {
+            Ok(block_str) => block_str,
+            Err(err) => {
+                eprintln!("Error fetching block: {}", err);
+                exit(1);
+            }
+        };
+
+        match chain.process_transactions(&block_hex) {
+            Ok(has_tweaks) => {
+                println!("Store block handled: {}",has_tweaks);
+                db.insert_block(&block_hash, has_tweaks);
+            },
+            Err(err) => eprintln!("Not storing block: {}", err)
+        }
+        current_block += 1;
+    }
+    db.close();
     
-    let tweak = compute_silent_payment_key_tweak(&sender_pubkey, &silent_address.get_scan_key());
-    let tweak_hex = hex::encode(tweak.to_be_bytes());
-    println!("Tweak (Hex): {}", tweak_hex);
-
-    let txn_out_pubkey = compute_spend_payment_address(tweak, &silent_address.get_scan_key());
-    println!("Txn Out Pub Key (Hex): {}", hex::encode(txn_out_pubkey.serialize()));
 
 }
 
