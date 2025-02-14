@@ -17,7 +17,7 @@
 			"request": "launch",
 			"name": "Debug",
 			"program": "${workspaceFolder}/tweak-indexer/target/debug/tweak-indexer",
-			"args": ["--start-height","610048", "--blocks","1"],
+			"args": ["--start-height","709677", "--blocks","0"],
 			"cwd": "${workspaceFolder}"
 		}
 	]

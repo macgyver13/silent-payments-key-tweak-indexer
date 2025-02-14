@@ -1,7 +1,8 @@
+use bitcoin::script::Instruction;
 use secp256k1::XOnlyPublicKey;
 use bitcoin::consensus::encode::deserialize_hex;
 use bitcoin::block::Block;
-use bitcoin::Transaction;
+use bitcoin::{Script, Transaction};
 use silentpayments::utils::receiving;
 use silentpayments::secp256k1::PublicKey;
 use std::process::Command;
@@ -13,6 +14,7 @@ use crate::database;
 enum ChainError {
     TxOutputNotFound,
     PubKeyFromInput,
+    SegWitVersionGE2,
 }
 impl std::error::Error for ChainError {}
 
@@ -21,6 +23,7 @@ impl std::fmt::Display for ChainError {
         match self {
             ChainError::TxOutputNotFound => write!(f, "Could not find previous output transaction"),
             ChainError::PubKeyFromInput => write!(f, "Pub Key From Input error"),
+            ChainError::SegWitVersionGE2 => write!(f, "Segwit version 2 or higher not allowed"),
         }
     }
 }
@@ -89,6 +92,17 @@ impl<'a> Chain<'a> {
         Ok(())
     }
 
+    fn is_segwit_gt_v1(&self, script_pubkey: &Script) -> bool {
+        let mut instructions = script_pubkey.instructions();
+
+        if let Some(Ok(Instruction::PushBytes(version))) = instructions.next() {
+            if version.len() == 1 {
+                return version[0] > 1;
+            }
+        }
+        false
+    }
+
     // Heavy inspiration from sp-client (https://github.com/cygnet3/sp-client) and rust-silentpayments (https://github.com/cygnet3/rust-silentpayments)
     fn process_transaction(&self, transaction: &Transaction) -> Result<bool, Box<dyn Error>> {
 
@@ -108,8 +122,11 @@ impl<'a> Chain<'a> {
                 None => return Err(Box::new(ChainError::TxOutputNotFound)),
             };
             
-            
             // Filter transactions by BIP352 consensus on allowed transactions
+            if self.is_segwit_gt_v1(&previous_script) {
+                return Err(Box::new(ChainError::SegWitVersionGE2));
+            }
+
             // Collect all input pub keys
             match receiving::get_pubkey_from_input(
                 &input.script_sig.to_bytes(), 
@@ -157,13 +174,21 @@ impl<'a> Chain<'a> {
         
         // println!("Header: {:?}", block.header);
         let mut has_tweaks: bool = false;
-        
         for (i, tx) in block.txdata.iter().enumerate() {
             // Filter transactions by BIP352 consensus on allowed transactions
             // Only process transactions with outputs that have a valid P2TR scriptpubkey
+            let mut has_taproot: bool = false;
             for output in tx.output.iter() {
                 if output.script_pubkey.is_p2tr() && XOnlyPublicKey::from_slice(&output.script_pubkey.as_bytes()[2..]).is_ok()  {
-                    has_tweaks |= self.process_transaction(tx)?;
+                    has_taproot = true;
+                }
+            }
+            if has_taproot {
+                match self.process_transaction(tx) {
+                    Ok(has_tweak) => has_tweaks |= has_tweak,
+                    Err(err) => {
+                        eprintln!("Error processing tx: {}, block: {}: err: {}", tx.compute_txid(), block.header.block_hash(), err);
+                    }
                 }
             }
         }
