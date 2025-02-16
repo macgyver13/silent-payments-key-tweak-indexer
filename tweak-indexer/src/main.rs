@@ -31,7 +31,7 @@ fn setup_logging() {
     // File layer for warnings & errors only
     let file_layer = fmt::layer()
         .with_writer(file_appender)
-        .with_filter(EnvFilter::new("warn,error")); // Only log warn & error
+        .with_filter(EnvFilter::new("info,warn,error")); // Only log warn & error
 
     // Combine both layers into a subscriber
     let subscriber = Registry::default()
@@ -141,7 +141,7 @@ fn main() {
             continue;
         }
         
-        println!("Block Hash {}, height: {}", block_hash, current_block);
+        info!("Block Hash {}, height: {}", block_hash, current_block);
 
         let block_hex = match chain::get_block(&block_hash) {
             Ok(block_str) => block_str,

@@ -7,7 +7,7 @@ use silentpayments::utils::receiving;
 use silentpayments::secp256k1::PublicKey;
 use std::process::Command;
 use std::error::Error;
-use tracing::{warn,debug};
+use tracing::{info,warn,debug};
 
 use crate::database;
 
@@ -141,7 +141,7 @@ impl<'a> Chain<'a> {
                     debug!("Input Previous Output: {}:{} -> {}", input.previous_output.txid, input.previous_output.vout, pubkey.to_string());
                 }
                 Ok(None) => {
-                    debug!("No public key found in input {}:{}", input.previous_output.txid, input.previous_output.vout);
+                    info!("No public key found in input {}:{}", input.previous_output.txid, input.previous_output.vout);
                 }
                 Err(_) => {
                     return Err(Box::new(ChainError::PubKeyFromInput));
