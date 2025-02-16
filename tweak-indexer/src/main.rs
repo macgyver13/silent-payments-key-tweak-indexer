@@ -1,7 +1,9 @@
 use std::process::exit;
 use clap::Parser;
 use database::Database;
-
+use tracing::{info,warn,error,debug};
+use tracing_subscriber::{fmt, Layer, layer::SubscriberExt, EnvFilter, Registry};
+use tracing_appender::rolling;
 
 mod chain;
 mod database;
@@ -17,11 +19,33 @@ struct Cli {
     blocks: Option<u32>,
 }
 
+fn setup_logging() {
+    // Create a rolling file appender (daily logs)
+    let file_appender = rolling::daily("logs", "debug.log");
+
+    // Console log layer
+    let stdout_layer = fmt::layer()
+        .pretty() // Makes console logs readable
+        .with_filter(EnvFilter::from_default_env()); // Uses RUST_LOG
+
+    // File layer for warnings & errors only
+    let file_layer = fmt::layer()
+        .with_writer(file_appender)
+        .with_filter(EnvFilter::new("warn,error")); // Only log warn & error
+
+    // Combine both layers into a subscriber
+    let subscriber = Registry::default()
+        .with(stdout_layer)
+        .with(file_layer);
+
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+}
+
 fn auto_index(db: &Database) -> (u32, u32) {
 
     let starting_block= db.get_highest_block().map_or_else(
         |err| {
-            eprintln!("Failed to fetch highest block: {}", err);
+            error!("Failed to fetch highest block: {}", err);
             exit(1);
         },
         |highest_block| if highest_block > 0 { highest_block } else { 709632 }, //Default to first Taproot block
@@ -30,7 +54,7 @@ fn auto_index(db: &Database) -> (u32, u32) {
     let mut last_block = match chain::get_block_count() {
         Ok(block_count) => block_count.parse().expect("Failed to parse current block count"),
         Err(err) => {
-            eprintln!("Error fetching block count: {}", err);
+            error!("Error fetching block count: {}", err);
             exit(1);
         }
     };
@@ -81,6 +105,8 @@ fn handle_inputs() -> (u32, u32) {
 }
 
 fn main() {
+    setup_logging();
+    
     let (start_height, end_height) = handle_inputs();
     let mut current_block = start_height;
     let mut last_block = end_height;
@@ -88,7 +114,7 @@ fn main() {
     let db = match database::Database::new("blocks.db") {
         Ok(db) => db,
         Err(err) => {
-            eprintln!("Not able to open database: {}", err);
+            error!("Not able to open database: {}", err);
             exit(1);
         }
     };
@@ -103,14 +129,14 @@ fn main() {
         let block_hash = match chain::get_block_hash(current_block) {
             Ok(block_hash_str) => block_hash_str,
             Err(err) => {
-                eprintln!("Error fetching block hash: {}", err);
+                error!("Error fetching block hash: {}", err);
                 exit(1);
             }
         };
 
         // check if the block has been handled
         if db.get_block(&block_hash).is_ok_and(|x| x.len() > 0) {
-            println!("******** Already processed block hash {}, height: {} ********", block_hash, current_block);
+            info!("******** Already processed block hash {}, height: {} ********", block_hash, current_block);
             current_block += 1;
             continue;
         }
@@ -120,7 +146,7 @@ fn main() {
         let block_hex = match chain::get_block(&block_hash) {
             Ok(block_str) => block_str,
             Err(err) => {
-                eprintln!("Error fetching block: {}", err);
+                error!("Error fetching block: {}", err);
                 exit(1);
             }
         };
@@ -133,7 +159,7 @@ fn main() {
                     has_tweaks: has_tweaks 
                 });
             },
-            Err(err) => eprintln!("Not storing block: {}", err)
+            Err(err) => warn!("Not storing block: {}", err)
         }
         current_block += 1;
     }
@@ -141,6 +167,3 @@ fn main() {
     
 
 }
-
-//https://github.com/tokio-rs/axum
-//https://github.com/rusqlite/rusqlite

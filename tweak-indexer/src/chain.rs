@@ -7,6 +7,7 @@ use silentpayments::utils::receiving;
 use silentpayments::secp256k1::PublicKey;
 use std::process::Command;
 use std::error::Error;
+use tracing::{warn,debug};
 
 use crate::database;
 
@@ -117,6 +118,8 @@ impl<'a> Chain<'a> {
 
             let previous_tx: Transaction = deserialize_hex::<Transaction>(&previous_tx_hex)?;
 
+            assert!(previous_tx.compute_txid() == input.previous_output.txid);
+
             let previous_script = match previous_tx.output.get(input.previous_output.vout as usize){
                 Some(output) => output.script_pubkey.clone(),
                 None => return Err(Box::new(ChainError::TxOutputNotFound)),
@@ -135,10 +138,10 @@ impl<'a> Chain<'a> {
             ) {
                 Ok(Some(pubkey)) => {
                     input_pubkeys.push(pubkey);
-                    // println!("  Input {}: Previous Output: {}:{}", input_index, input.previous_output.txid, input.previous_output.vout);
+                    debug!("Input Previous Output: {}:{} -> {}", input.previous_output.txid, input.previous_output.vout, pubkey.to_string());
                 }
                 Ok(None) => {
-
+                    debug!("No public key found in input {}:{}", input.previous_output.txid, input.previous_output.vout);
                 }
                 Err(_) => {
                     return Err(Box::new(ChainError::PubKeyFromInput));
@@ -172,7 +175,6 @@ impl<'a> Chain<'a> {
             .map_err(|e| format!("Failed to decode block: {}", e))?;
         self.set_block(block.clone());
         
-        // println!("Header: {:?}", block.header);
         let mut has_tweaks: bool = false;
         for (i, tx) in block.txdata.iter().enumerate() {
             // Filter transactions by BIP352 consensus on allowed transactions
@@ -187,7 +189,7 @@ impl<'a> Chain<'a> {
                 match self.process_transaction(tx) {
                     Ok(has_tweak) => has_tweaks |= has_tweak,
                     Err(err) => {
-                        eprintln!("Error processing tx: {}, block: {}: err: {}", tx.compute_txid(), block.header.block_hash(), err);
+                        warn!("Error processing tx: {}, block: {}: err: {}", tx.compute_txid(), block.header.block_hash(), err);
                     }
                 }
             }
