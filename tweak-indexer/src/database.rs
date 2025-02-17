@@ -81,34 +81,34 @@ impl Database {
         Ok(highest_block.unwrap_or(0))
     }
 
-    pub fn get_tweaks(&self, block_hash: &str) -> Result<Vec<Tweak>> {
-        let mut stmt = self.conn.prepare("SELECT block_hash, tx_id, tweak FROM tweaks WHERE block_hash = ?1")?;
-        let tweaks_iter = stmt.query_map(params![block_hash], |row| {
-            Ok(Tweak {
-                block_hash: row.get(0)?,
-                tx_id: row.get(1)?,
-                tweak: row.get(2)?,
-            })
-        })?;
+    // pub fn get_tweaks(&self, block_hash: &str) -> Result<Vec<Tweak>> {
+    //     let mut stmt = self.conn.prepare("SELECT block_hash, tx_id, tweak FROM tweaks WHERE block_hash = ?1")?;
+    //     let tweaks_iter = stmt.query_map(params![block_hash], |row| {
+    //         Ok(Tweak {
+    //             block_hash: row.get(0)?,
+    //             tx_id: row.get(1)?,
+    //             tweak: row.get(2)?,
+    //         })
+    //     })?;
 
-        Ok(tweaks_iter.filter_map(Result::ok).collect())
-    }
+    //     Ok(tweaks_iter.filter_map(Result::ok).collect())
+    // }
 
-    pub fn has_tweak(&self, tweak: &str) -> Result<Vec<Tweak>> {
-        let query = "SELECT block_hash, tx_id, tweak FROM tweaks WHERE tweak = ?1".to_string();
-        let params: Vec<&dyn rusqlite::ToSql> = vec![&tweak];
+    // pub fn has_tweak(&self, tweak: &str) -> Result<Vec<Tweak>> {
+    //     let query = "SELECT block_hash, tx_id, tweak FROM tweaks WHERE tweak = ?1".to_string();
+    //     let params: Vec<&dyn rusqlite::ToSql> = vec![&tweak];
 
-        let mut stmt = self.conn.prepare(&query)?;
-        let tweaks_iter = stmt.query_map(rusqlite::params_from_iter(params), |row| {
-            Ok(Tweak {
-                block_hash: row.get(0)?,
-                tx_id: row.get(1)?,
-                tweak: row.get(2)?,
-            })
-        })?;
+    //     let mut stmt = self.conn.prepare(&query)?;
+    //     let tweaks_iter = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+    //         Ok(Tweak {
+    //             block_hash: row.get(0)?,
+    //             tx_id: row.get(1)?,
+    //             tweak: row.get(2)?,
+    //         })
+    //     })?;
 
-        Ok(tweaks_iter.filter_map(Result::ok).collect())
-    }
+    //     Ok(tweaks_iter.filter_map(Result::ok).collect())
+    // }
 
     pub fn close(self) { 
         let _ = self.conn.close();

@@ -1,8 +1,8 @@
-use std::process::exit;
+use std::{process::exit, thread::sleep, time::Duration};
 use clap::Parser;
 use database::Database;
-use tracing::{info,warn,error,debug};
-use tracing_subscriber::{fmt, Layer, layer::SubscriberExt, EnvFilter, Registry};
+use tracing::{error, info, warn, Level};
+use tracing_subscriber::{filter, fmt, layer::SubscriberExt, EnvFilter, Layer, Registry};
 use tracing_appender::rolling;
 
 mod chain;
@@ -19,9 +19,21 @@ struct Cli {
     blocks: Option<u32>,
 }
 
+struct StartupParams {
+    start_height: u32,
+    end_height: u32,
+    continuous_index: bool,
+    db_path: String,
+}
+
 fn setup_logging() {
     // Create a rolling file appender (daily logs)
     let file_appender = rolling::daily("logs", "debug.log");
+
+    // let file_appender = File::create("debug.log");
+    // let file_appender = match file_appender  {Ok(file) => file,Err(error) => panic!("Error: {:?}",error),};
+    // let debug_log = fmt::layer()
+        // .with_writer(Arc::new(file_appender));
 
     // Console log layer
     let stdout_layer = fmt::layer()
@@ -31,7 +43,7 @@ fn setup_logging() {
     // File layer for warnings & errors only
     let file_layer = fmt::layer()
         .with_writer(file_appender)
-        .with_filter(EnvFilter::new("info,warn,error")); // Only log warn & error
+        .with_filter(filter::LevelFilter::from_level(Level::INFO)); // Only log warn & error
 
     // Combine both layers into a subscriber
     let subscriber = Registry::default()
@@ -66,7 +78,7 @@ fn auto_index(db: &Database) -> (u32, u32) {
     (starting_block, last_block)
 }
 
-fn handle_inputs() -> (u32, u32) {
+fn handle_inputs() -> StartupParams {
 
     let cli = Cli::parse();
 
@@ -101,17 +113,17 @@ fn handle_inputs() -> (u32, u32) {
         start_height + block_count
     };
 
-    (start_height, end_height)
+    StartupParams{ 
+        start_height: start_height, 
+        end_height: end_height, 
+        continuous_index: start_height == 0, 
+        db_path: String::from("blocks.db"),
+    }
 }
 
-fn main() {
-    setup_logging();
-    
-    let (start_height, end_height) = handle_inputs();
-    let mut current_block = start_height;
-    let mut last_block = end_height;
+fn index_blocks(startup: StartupParams) {
 
-    let db = match database::Database::new("blocks.db") {
+    let db = match database::Database::new(&startup.db_path) {
         Ok(db) => db,
         Err(err) => {
             error!("Not able to open database: {}", err);
@@ -119,51 +131,74 @@ fn main() {
         }
     };
 
-    // determine next block based on last block processed in db
-    if current_block == 0 {
-        (current_block, last_block) = auto_index(&db);
-    }
-
-    let mut chain = chain::Chain::new(&db);
-    while current_block <= last_block {
-        let block_hash = match chain::get_block_hash(current_block) {
-            Ok(block_hash_str) => block_hash_str,
-            Err(err) => {
-                error!("Error fetching block hash: {}", err);
-                exit(1);
-            }
-        };
-
-        // check if the block has been handled
-        if db.get_block(&block_hash).is_ok_and(|x| x.len() > 0) {
-            info!("******** Already processed block hash {}, height: {} ********", block_hash, current_block);
-            current_block += 1;
-            continue;
-        }
-        
-        info!("Block Hash {}, height: {}", block_hash, current_block);
-
-        let block_hex = match chain::get_block(&block_hash) {
-            Ok(block_str) => block_str,
-            Err(err) => {
-                error!("Error fetching block: {}", err);
-                exit(1);
-            }
-        };
-
-        match chain.process_transactions(&block_hex) {
-            Ok(has_tweaks) => {
-                let _ = db.insert_block(&database::Block { 
-                    height: current_block, 
-                    hash: block_hash, 
-                    has_tweaks: has_tweaks 
-                });
-            },
-            Err(err) => warn!("Not storing block: {}", err)
-        }
-        current_block += 1;
-    }
-    db.close();
+    let mut current_block = startup.start_height;
+    let mut last_block = startup.end_height;
     
+    loop {
+        // determine next block based on last block processed in db
+        if startup.continuous_index {
+            (current_block, last_block) = auto_index(&db);
+        }
+
+        let mut chain = chain::Chain::new(&db);
+        while current_block <= last_block {
+            let block_hash = match chain::get_block_hash(current_block) {
+                Ok(block_hash_str) => block_hash_str,
+                Err(err) => {
+                    if err.contains("height out of range") {
+                        info!("At current block height");
+                        break;
+                    } else {
+                        error!("Error fetching block hash: {}", err);
+                        exit(1);
+                    }
+                }
+            };
+
+            // check if the block has been handled
+            if db.get_block(&block_hash).is_ok_and(|x| x.len() > 0) {
+                info!("******** Already processed block hash {}, height: {} ********", block_hash, current_block);
+                current_block += 1;
+                continue;
+            }
+            
+            info!("Block Hash {}, height: {}", block_hash, current_block);
+
+            let block_hex = match chain::get_block(&block_hash) {
+                Ok(block_str) => block_str,
+                Err(err) => {
+                    error!("Error fetching block: {}", err);
+                    exit(1);
+                }
+            };
+
+            match chain.process_transactions(&block_hex) {
+                Ok(has_tweaks) => {
+                    let _ = db.insert_block(&database::Block { 
+                        height: current_block, 
+                        hash: block_hash, 
+                        has_tweaks: has_tweaks 
+                    });
+                },
+                Err(err) => warn!("Not storing block: {}", err)
+            }
+            current_block += 1;
+        }
+
+        if startup.continuous_index {
+            info!("Sleeping for 5 minutes, then try again");
+            sleep(Duration::from_secs(300));
+        } else {
+            db.close();
+            return;
+        }
+    }
+
+}
+
+fn main() {
+    setup_logging();
+    
+    index_blocks( handle_inputs());
 
 }

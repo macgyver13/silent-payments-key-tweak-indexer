@@ -1,2 +1,7 @@
 tweak-indexer/target/
 tweak-service/target/
+target/
+Cargo.lock
+blocks.db
+logs/
+**/Cargo.lock
