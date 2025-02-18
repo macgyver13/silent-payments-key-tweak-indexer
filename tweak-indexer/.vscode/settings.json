@@ -1,10 +1,15 @@
 {
     "rust-analyzer.linkedProjects": [
         {
-            "sysroot_src": "${workspaceFolder}/tweak-indexer",
+            "sysroot_src": "${workspaceFolder}",
             "crates": [
                 {
-                    "root_module": "src/main.rs",
+                    "root_module": "tweak-service/src/main.rs",
+                    "edition": "2018",
+                    "deps": [],
+                },
+                {
+                    "root_module": "tweak-indexer/src/main.rs",
                     "edition": "2018",
                     "deps": [],
                 },

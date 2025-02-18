@@ -5,7 +5,7 @@
   - ~~store public key tweak in db~~
   - ~~resume from last block indexed~~
 - building a server that can respond with key tweaks for a given blockhash
-  - webservice that responds key tweaks given a blockhash
+  - ~~webservice that responds key tweaks given a blockhash~~
 
 ### *** Experimental - use at your own risk ***
 
@@ -23,6 +23,12 @@ Options:
 ```
 
 *Note: block 614862 has a tweak
+
+Usage: tweak-service
+http://127.0.0.1:3030/tweaks/0000000000000000000687bca986194dc2c1f949318629b44bb54ec0a94d8244
+http://127.0.0.1:3030/status
+http://127.0.0.1:3030/block_stats
+
 
 ## Resources:
 
