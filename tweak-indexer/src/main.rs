@@ -161,8 +161,6 @@ fn index_blocks(startup: StartupParams) {
                 current_block += 1;
                 continue;
             }
-            
-            info!("Block Hash {}, height: {}", block_hash, current_block);
 
             let block_hex = match chain::get_block(&block_hash) {
                 Ok(block_str) => block_str,
@@ -179,6 +177,9 @@ fn index_blocks(startup: StartupParams) {
                     exit(1);
                 }
             }
+            
+            info!("Processing block hash {}, height: {}", block_hash, current_block);
+
             match chain.process_transactions(&block_hex) {
                 Ok(has_tweaks) => {
                     let _ = db.insert_block(&database::Block { 

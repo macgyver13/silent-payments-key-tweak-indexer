@@ -1,12 +1,12 @@
 use secp256k1::XOnlyPublicKey;
 use bitcoin::consensus::encode::deserialize_hex;
 use bitcoin::block::Block;
-use bitcoin::{ScriptBuf, Transaction};
+use bitcoin::{ScriptBuf, Transaction, WitnessVersion};
 use silentpayments::utils::receiving;
 use silentpayments::secp256k1::PublicKey;
 use std::process::{Command, Stdio};
 use std::error::Error;
-use tracing::{error,info,warn,debug};
+use tracing::{error,warn,debug};
 use serde::{Serialize, Deserialize};
 use serde_json;
 
@@ -95,7 +95,6 @@ pub fn get_block_with_input(block_hash: &str) -> Result<String, String> {
     }
 
     return Ok(String::from_utf8(result.stdout).unwrap().trim().to_string());
-    // bcli(&["getblock", block_hash, "3"])// "|", "jq", "-r", "'[.tx[].vin[] | {txid, vout, scriptPubKey: .prevout.scriptPubKey.hex}]'"])
 }
 
 pub fn get_transaction(txid: &str) -> Result<String, String> {
@@ -161,14 +160,16 @@ impl<'a> Chain<'a> {
         Ok(())
     }
 
-    //Determine if this script is using segwit version 0 or 1
+    //Determine if this spend script is using segwit version 2 or higher
     fn is_segwit_gt_v1(&self, script_pubkey: &ScriptBuf) -> bool {
-        if script_pubkey.to_bytes().len() > 0 {
-            let first_byte =script_pubkey.to_bytes()[0];
-            let second_digit = first_byte & 0x0F;
-            return second_digit > 1;
+        if let Some(version) = script_pubkey.witness_version() {
+            match version {
+                WitnessVersion::V0 | WitnessVersion::V1 => false, // v0 and v1 accepted
+                _ => true, // reject all other versions v2, ...
+            }
+        } else {
+            false // Not segwit pass
         }
-        false
     }
 
     // Heavy inspiration from sp-client (https://github.com/cygnet3/sp-client) and rust-silentpayments (https://github.com/cygnet3/rust-silentpayments)
@@ -198,6 +199,7 @@ impl<'a> Chain<'a> {
             
             // Filter transactions by BIP352 consensus on allowed transactions
             if self.is_segwit_gt_v1(&previous_script) {
+                warn!("Segwit > v1: {}",previous_script.to_hex_string());
                 return Err(Box::new(ChainError::SegWitVersionGE2));
             }
 
@@ -247,13 +249,14 @@ impl<'a> Chain<'a> {
         self.set_block(block.clone());
         
         let mut has_tweaks: bool = false;
-        for (i, tx) in block.txdata.iter().enumerate() {
+        for tx in block.txdata.iter() {
             // Filter transactions by BIP352 consensus on allowed transactions
             // Only process transactions with outputs that have a valid P2TR scriptpubkey
             let mut has_taproot: bool = false;
             for output in tx.output.iter() {
                 if output.script_pubkey.is_p2tr() && XOnlyPublicKey::from_slice(&output.script_pubkey.as_bytes()[2..]).is_ok()  {
                     has_taproot = true;
+                    break;
                 }
             }
             if has_taproot {
@@ -270,11 +273,13 @@ impl<'a> Chain<'a> {
     }
 }
 
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bitcoin::blockdata::script::Builder;
-    use bitcoin::blockdata::opcodes::all::{OP_PUSHBYTES_0, OP_PUSHBYTES_1, OP_PUSHBYTES_2, OP_PUSHNUM_1, OP_PUSHNUM_2};
+    use bitcoin::blockdata::opcodes::all::{*};
 
     #[test]
     fn test_is_segwit_gt_v1() {
@@ -283,24 +288,25 @@ mod tests {
 
         // Test empty script
         assert_eq!(chain.is_segwit_gt_v1(&Builder::new().into_script()), false);
+
         // Test with SegWit version 0
         let script_pubkey_v0 = Builder::new().push_opcode(OP_PUSHBYTES_0).into_script();
         assert_eq!(chain.is_segwit_gt_v1(&script_pubkey_v0), false);
 
-        // Test with SegWit version 1
+        // Test with 0x0101
         let script_pubkey_v1 = Builder::new().push_opcode(OP_PUSHBYTES_1).push_slice([0]).into_script();
         assert_eq!(chain.is_segwit_gt_v1(&script_pubkey_v1), false);
-
-        // Test with SegWit version 2
-        let script_pubkey_v2 = Builder::new().push_opcode(OP_PUSHBYTES_2).push_slice([0,1]).into_script();
-        assert_eq!(chain.is_segwit_gt_v1(&script_pubkey_v2), true);
 
         // Test with Taproot version 1
         let script_pubkey_v1 = Builder::new().push_opcode(OP_PUSHNUM_1).push_slice([1,2,3,4]).into_script();
         assert_eq!(chain.is_segwit_gt_v1(&script_pubkey_v1), false);
 
-        // Test with Taproot version 2
+        // Test with future version 2
         let script_pubkey_v2 = Builder::new().push_opcode(OP_PUSHNUM_2).push_slice([1,2,3,4,5,6]).into_script();
         assert_eq!(chain.is_segwit_gt_v1(&script_pubkey_v2), true);
+
+        // Test with P2SH script
+        let p2sh_script = Builder::new().push_opcode(OP_HASH160).push_slice(&[0x8b, 0xc9, 0xba, 0xf0, 0xcc, 0x16, 0x73, 0xad, 0x8e, 0xdd, 0x14, 0xbe, 0x27, 0xff, 0x2f, 0x07, 0x2f, 0x92, 0xb1, 0x05]).push_opcode(OP_EQUAL).into_script();
+        assert_eq!(chain.is_segwit_gt_v1(&p2sh_script), false);
     }
 }

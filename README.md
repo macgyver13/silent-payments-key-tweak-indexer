@@ -22,13 +22,17 @@ Options:
   --blocks # # will process n number of blocks before quitting
 ```
 
-*Note: block 614862 has a tweak
+*Note: block 614862 has a tweak?
 
 Usage: tweak-service
 
-* http://127.0.0.1:3030/tweaks/0000000000000000000687bca986194dc2c1f949318629b44bb54ec0a94d8244
-* http://127.0.0.1:3030/status
-* http://127.0.0.1:3030/block_stats
+* Returns all tweaks for a given block hash
+  `http://<ip>:3030/tweaks/0000000000000000000687bca986194dc2c1f949318629b44bb54ec0a94d8244`
+
+* Returns current block height of indexer
+  `http://<ip>:3030/status`
+* Returns tweak count for each block indexed
+  `http://<ip>:3030/block_stats`
 
 ## Resources:
 
