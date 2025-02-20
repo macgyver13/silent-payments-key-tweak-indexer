@@ -172,6 +172,13 @@ fn index_blocks(startup: StartupParams) {
                 }
             };
 
+            match chain::get_block_input_transactions(&block_hash) {
+                Ok(prev_scripts) => chain.set_previous_scripts(prev_scripts),
+                Err(err) => {
+                    error!("Error fetching prev out scripts: {}", err);
+                    exit(1);
+                }
+            }
             match chain.process_transactions(&block_hex) {
                 Ok(has_tweaks) => {
                     let _ = db.insert_block(&database::Block { 
@@ -198,7 +205,29 @@ fn index_blocks(startup: StartupParams) {
 
 fn main() {
     setup_logging();
-    
     index_blocks( handle_inputs());
+}
 
+#[cfg(test)]
+mod tests {
+    use crate::database;
+    use crate::chain::{Chain,get_block_with_input};
+
+    #[test]
+    fn test_process_transactions() {
+        let db = database::Database::new(":memory:").unwrap();
+        let mut chain = Chain::new(&db);
+
+        let block_hash = "0000000000000000000149ba526848af34e4dbed814a85859753fadf5594e226";
+
+        let block_hex = match get_block_with_input(&block_hash) {
+            Ok(block_str) => block_str,
+            Err(err) => {
+                err
+            }
+        };
+
+        println!("json: {:?}",block_hex);
+        let has_tweaks = chain.process_transactions(&block_hex).unwrap();
+    }
 }

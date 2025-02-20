@@ -8,7 +8,7 @@
 			"type": "lldb",
 			"request": "launch",
 			"name": "Launch",
-			"program": "${workspaceFolder}/tweak-indexer/target/debug/tweak-indexer",
+			"program": "${workspaceFolder}/target/debug/tweak-indexer",
 			"args": [],
 			"cwd": "${workspaceFolder}"
 		},
@@ -16,7 +16,7 @@
 			"type": "lldb",
 			"request": "launch",
 			"name": "Debug",
-			"program": "${workspaceFolder}/tweak-indexer/target/debug/tweak-indexer",
+			"program": "${workspaceFolder}/target/debug/tweak-indexer",
 			"args": ["--start-height","709677", "--blocks","0"],
 			"cwd": "${workspaceFolder}"
 		}

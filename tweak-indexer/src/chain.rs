@@ -1,13 +1,21 @@
-use bitcoin::script::Instruction;
 use secp256k1::XOnlyPublicKey;
 use bitcoin::consensus::encode::deserialize_hex;
 use bitcoin::block::Block;
-use bitcoin::{Script, Transaction};
+use bitcoin::{ScriptBuf, Transaction};
 use silentpayments::utils::receiving;
 use silentpayments::secp256k1::PublicKey;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::error::Error;
-use tracing::{info,warn,debug};
+use tracing::{error,info,warn,debug};
+use serde::{Serialize, Deserialize};
+use serde_json;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PreviousScript {
+    txid: String,
+    vout: u32,
+    script: String,
+}
 
 use crate::database;
 
@@ -16,6 +24,7 @@ enum ChainError {
     TxOutputNotFound,
     PubKeyFromInput,
     SegWitVersionGE2,
+    ParseInputTransaction,
 }
 impl std::error::Error for ChainError {}
 
@@ -25,8 +34,30 @@ impl std::fmt::Display for ChainError {
             ChainError::TxOutputNotFound => write!(f, "Could not find previous output transaction"),
             ChainError::PubKeyFromInput => write!(f, "Pub Key From Input error"),
             ChainError::SegWitVersionGE2 => write!(f, "Segwit version 2 or higher not allowed"),
+            ChainError::ParseInputTransaction => write!(f, "Unable to parse previous output transaction")
         }
     }
+}
+
+// take json transaction output and parse with serde to product Vec<PreviousScript>
+pub fn get_block_input_transactions(block_hash: &str) -> Result<Vec<PreviousScript>, Box<dyn Error>> {
+    let transactions_json = match get_block_with_input(&block_hash) {
+        Ok(block_str) => block_str,
+        Err(err) => {
+            error!("Error fetching block: {}", err);
+            return Err(Box::new(ChainError::ParseInputTransaction));
+        }
+    };
+    
+    let previous_scripts: Vec<PreviousScript> = match serde_json::from_str(&transactions_json) {
+        Ok(scripts) => scripts,
+        Err(err) => {
+            error!("Error parsing json transactions: {}", err);
+            return Err(Box::new(ChainError::ParseInputTransaction));
+        }
+    };
+    
+    Ok(previous_scripts)
 }
 
 pub fn get_block_count() -> Result<String, String> {
@@ -39,6 +70,32 @@ pub fn get_block_hash(height: u32) -> Result<String, String> {
 
 pub fn get_block(block_hash: &str) -> Result<String, String> {
     bcli(&["getblock", block_hash, "0"])
+}
+
+// Fetch the long form output to include input previous out (faster than using RPC for each transaction in a block)
+pub fn get_block_with_input(block_hash: &str) -> Result<String, String> {
+    let first_cmd = Command::new("bitcoin-cli")
+        .args(["getblock", block_hash, "3"]) 
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to execute bitcoin-cli: {}", e))?;
+
+    // Second command: Processing JSON with jq
+    let result = Command::new("jq")
+        .args(&["-c", "[.tx[].vin[] | select(.txid != null) | {txid, vout, script: .prevout.scriptPubKey.hex}]"])
+        .stdin(Stdio::from(first_cmd.stdout.unwrap())) // Pipe stdout from first command
+        .output()
+        .map_err(|e| format!("Failed to execute jq: {}", e))?;
+
+    if !result.status.success() {
+        return Err(format!(
+            "bitcoin-cli error: {}",
+            String::from_utf8_lossy(&result.stderr)
+        ));
+    }
+
+    return Ok(String::from_utf8(result.stdout).unwrap().trim().to_string());
+    // bcli(&["getblock", block_hash, "3"])// "|", "jq", "-r", "'[.tx[].vin[] | {txid, vout, scriptPubKey: .prevout.scriptPubKey.hex}]'"])
 }
 
 pub fn get_transaction(txid: &str) -> Result<String, String> {
@@ -64,11 +121,12 @@ pub fn bcli(args: &[&str]) -> Result<String, String> {
 pub struct Chain<'a> {
     db: &'a database::Database,
     block: Option<Block>,
+    previous_scripts: Option<Vec<PreviousScript>>
 }
 
 impl<'a> Chain<'a> {
     pub fn new(db: &'a database::Database) -> Self {
-        Self { db, block: None }
+        Self { db, block: None, previous_scripts: None }
     }
 
     pub fn set_block(&mut self, block: Block) {
@@ -83,6 +141,16 @@ impl<'a> Chain<'a> {
         self.get_block().block_hash().to_string()
     }
 
+    //Should be set once per block
+    pub fn set_previous_scripts(&mut self, previous_scripts: Vec<PreviousScript>) {
+        self.previous_scripts = Some(previous_scripts);
+    }
+
+    //Return the matching previous output string given txid and vout
+    pub fn find_previous_script(&self, tx_id: &str, vout: u32) -> Option<&PreviousScript> {
+        self.previous_scripts.as_ref()?.iter().find(|ps| ps.txid == tx_id && ps.vout == vout)
+    }
+
     fn save_tweak_data(&self, tweak: PublicKey, tx_id: &str) -> Result<(), ChainError> {
         let block_hash_str = self.block_hash_str().clone();
         let _ = self.db.insert_tweak(&database::Tweak { 
@@ -93,13 +161,12 @@ impl<'a> Chain<'a> {
         Ok(())
     }
 
-    fn is_segwit_gt_v1(&self, script_pubkey: &Script) -> bool {
-        let mut instructions = script_pubkey.instructions();
-
-        if let Some(Ok(Instruction::PushBytes(version))) = instructions.next() {
-            if version.len() == 1 {
-                return version[0] > 1;
-            }
+    //Determine if this script is using segwit version 0 or 1
+    fn is_segwit_gt_v1(&self, script_pubkey: &ScriptBuf) -> bool {
+        if script_pubkey.to_bytes().len() > 0 {
+            let first_byte =script_pubkey.to_bytes()[0];
+            let second_digit = first_byte & 0x0F;
+            return second_digit > 1;
         }
         false
     }
@@ -113,16 +180,20 @@ impl<'a> Chain<'a> {
             if input.previous_output.is_null() {
                 return Ok(false);
             }
-            
-            let previous_tx_hex = get_transaction(&input.previous_output.txid.to_string())?;
 
-            let previous_tx: Transaction = deserialize_hex::<Transaction>(&previous_tx_hex)?;
+            // Fetch the previous transaction
+            let previous_script = if let Some(prev_script) = self.find_previous_script(&input.previous_output.txid.to_string(), input.previous_output.vout) {
+                ScriptBuf::from_hex(&prev_script.script)?
+            } else {
+                warn!("Had to fetch previous input transaction using RPC (txid): {}",transaction.compute_txid());
+                let previous_tx_hex = get_transaction(&input.previous_output.txid.to_string())?;
+                let previous_tx: Transaction = deserialize_hex::<Transaction>(&previous_tx_hex)?;
+                assert!(previous_tx.compute_txid() == input.previous_output.txid);
 
-            assert!(previous_tx.compute_txid() == input.previous_output.txid);
-
-            let previous_script = match previous_tx.output.get(input.previous_output.vout as usize){
-                Some(output) => output.script_pubkey.clone(),
-                None => return Err(Box::new(ChainError::TxOutputNotFound)),
+                match previous_tx.output.get(input.previous_output.vout as usize) {
+                    Some(output) => output.script_pubkey.clone(),
+                    None => return Err(Box::new(ChainError::TxOutputNotFound)),
+                }
             };
             
             // Filter transactions by BIP352 consensus on allowed transactions
@@ -141,7 +212,7 @@ impl<'a> Chain<'a> {
                     debug!("Input Previous Output: {}:{} -> {}", input.previous_output.txid, input.previous_output.vout, pubkey.to_string());
                 }
                 Ok(None) => {
-                    info!("No public key found in input {}:{}", input.previous_output.txid, input.previous_output.vout);
+                    debug!("No public key found in input {}:{}", input.previous_output.txid, input.previous_output.vout);
                 }
                 Err(_) => {
                     return Err(Box::new(ChainError::PubKeyFromInput));
@@ -196,5 +267,40 @@ impl<'a> Chain<'a> {
         }
 
         Ok(has_tweaks)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::blockdata::script::Builder;
+    use bitcoin::blockdata::opcodes::all::{OP_PUSHBYTES_0, OP_PUSHBYTES_1, OP_PUSHBYTES_2, OP_PUSHNUM_1, OP_PUSHNUM_2};
+
+    #[test]
+    fn test_is_segwit_gt_v1() {
+        let db = database::Database::new(":memory:").unwrap();
+        let chain = Chain::new(&db);
+
+        // Test empty script
+        assert_eq!(chain.is_segwit_gt_v1(&Builder::new().into_script()), false);
+        // Test with SegWit version 0
+        let script_pubkey_v0 = Builder::new().push_opcode(OP_PUSHBYTES_0).into_script();
+        assert_eq!(chain.is_segwit_gt_v1(&script_pubkey_v0), false);
+
+        // Test with SegWit version 1
+        let script_pubkey_v1 = Builder::new().push_opcode(OP_PUSHBYTES_1).push_slice([0]).into_script();
+        assert_eq!(chain.is_segwit_gt_v1(&script_pubkey_v1), false);
+
+        // Test with SegWit version 2
+        let script_pubkey_v2 = Builder::new().push_opcode(OP_PUSHBYTES_2).push_slice([0,1]).into_script();
+        assert_eq!(chain.is_segwit_gt_v1(&script_pubkey_v2), true);
+
+        // Test with Taproot version 1
+        let script_pubkey_v1 = Builder::new().push_opcode(OP_PUSHNUM_1).push_slice([1,2,3,4]).into_script();
+        assert_eq!(chain.is_segwit_gt_v1(&script_pubkey_v1), false);
+
+        // Test with Taproot version 2
+        let script_pubkey_v2 = Builder::new().push_opcode(OP_PUSHNUM_2).push_slice([1,2,3,4,5,6]).into_script();
+        assert_eq!(chain.is_segwit_gt_v1(&script_pubkey_v2), true);
     }
 }
